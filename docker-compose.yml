@@ -1,0 +1,44 @@
+services:
+  app:
+    build: .
+    container_name: acervo_hub_app
+    environment:
+      APP_NAME: ${APP_NAME:-AcervoHub}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      SECRET_KEY: ${SECRET_KEY:-change-this-development-secret}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-120}
+      PASSWORD_HASH_ROUNDS: ${PASSWORD_HASH_ROUNDS:-12}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-acervo_user}:${POSTGRES_PASSWORD:-acervo_password}@postgres:5432/${POSTGRES_DB:-acervo_hub}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
+      SEED_DATABASE: ${SEED_DATABASE:-true}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - acervo_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: acervo_hub_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-acervo_hub}
+      POSTGRES_USER: ${POSTGRES_USER:-acervo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-acervo_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-acervo_user} -d ${POSTGRES_DB:-acervo_hub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - acervo_net
+
+volumes:
+  postgres_data:
+
+networks:
+  acervo_net:
+    driver: bridge

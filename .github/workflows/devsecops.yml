@@ -1,0 +1,170 @@
+name: AcervoHub DevSecOps Pipeline
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  test-and-sast:
+    name: Tests, SAST, SCA and Secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install project and scanner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install bandit pip-audit semgrep
+
+      - name: Run automated tests
+        env:
+          DATABASE_URL: sqlite:////tmp/acervo_hub_ci.sqlite3
+          SECRET_KEY: ci-test-secret
+          SEED_DATABASE: "false"
+          PASSWORD_HASH_ROUNDS: "4"
+        run: pytest --junitxml=reports/pytest-junit.xml
+
+      - name: Secret Detection with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: detect --source . --redact --report-format sarif --report-path reports/gitleaks.sarif
+
+      - name: SCA with pip-audit
+        continue-on-error: true
+        run: pip-audit -r requirements.txt --format json --output reports/pip-audit.json
+
+      - name: SAST with Bandit
+        continue-on-error: true
+        run: bandit -r app -f json -o reports/bandit.json
+
+      - name: SAST with Semgrep
+        continue-on-error: true
+        run: semgrep scan --config p/python --config p/owasp-top-ten --json --output reports/semgrep.json
+
+      - name: Upload SAST SARIF when available
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/gitleaks.sarif
+        continue-on-error: true
+
+      - name: Upload code analysis reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-security-reports
+          path: reports/
+          if-no-files-found: warn
+
+  iac-and-container:
+    name: IaC and Container Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - name: IaC scan with Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: dockerfile,docker_compose
+          output_format: cli,json
+          output_file_path: console,reports/checkov.json
+          soft_fail: true
+
+      - name: Build application image
+        run: docker build -t acervohub:${{ github.sha }} .
+
+      - name: Container and filesystem scan with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: acervohub:${{ github.sha }}
+          format: json
+          output: reports/trivy-image.json
+          vuln-type: os,library
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: "0"
+
+      - name: Upload IaC and container reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-security-reports
+          path: reports/
+          if-no-files-found: warn
+
+  dast:
+    name: DAST with OWASP ZAP
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - name: Start AcervoHub stack
+        run: docker compose up --build -d
+
+      - name: Wait for application health
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+
+      - name: DAST baseline scan with OWASP ZAP
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: "http://localhost:8000"
+          cmd_options: "-a -r zap-baseline.html -J zap-baseline.json"
+          allow_issue_writing: false
+          fail_action: false
+
+      - name: Collect ZAP reports
+        if: always()
+        run: |
+          cp zap-baseline.html reports/zap-baseline.html 2>/dev/null || true
+          cp zap-baseline.json reports/zap-baseline.json 2>/dev/null || true
+
+      - name: Stop AcervoHub stack
+        if: always()
+        run: docker compose down -v
+
+      - name: Upload DAST reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-security-reports
+          path: reports/
+          if-no-files-found: warn
