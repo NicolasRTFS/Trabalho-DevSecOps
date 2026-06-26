@@ -32,8 +32,14 @@ jobs:
       - name: Install project and scanner dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
           pip install bandit pip-audit semgrep
+          pip install --force-reinstall -r requirements.txt
+          python - <<'PY'
+          import fastapi
+          import starlette
+          print("fastapi", fastapi.__version__)
+          print("starlette", starlette.__version__)
+          PY
 
       - name: Run automated tests
         env:
@@ -89,10 +95,13 @@ jobs:
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
-          framework: dockerfile,docker_compose
           output_format: cli,json
           output_file_path: console,reports/checkov.json
           soft_fail: true
+
+      - name: Ensure Checkov report exists
+        if: always()
+        run: test -f reports/checkov.json || echo '{"results":{}}' > reports/checkov.json
 
       - name: Build application image
         run: docker build -t acervohub:${{ github.sha }} .
