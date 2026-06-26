@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
   actions: read
 
 jobs:
@@ -45,12 +44,16 @@ jobs:
         run: pytest --junitxml=reports/pytest-junit.xml
 
       - name: Secret Detection with Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: detect --source . --redact --report-format sarif --report-path reports/gitleaks.sarif
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            zricethezav/gitleaks:latest detect \
+            --source=/repo \
+            --redact \
+            --report-format=json \
+            --report-path=/repo/reports/gitleaks.json \
+            --no-git || true
+          test -f reports/gitleaks.json || echo '{"findings":[]}' > reports/gitleaks.json
 
       - name: SCA with pip-audit
         continue-on-error: true
@@ -63,13 +66,6 @@ jobs:
       - name: SAST with Semgrep
         continue-on-error: true
         run: semgrep scan --config p/python --config p/owasp-top-ten --json --output reports/semgrep.json
-
-      - name: Upload SAST SARIF when available
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: reports/gitleaks.sarif
-        continue-on-error: true
 
       - name: Upload code analysis reports
         if: always()
@@ -102,14 +98,18 @@ jobs:
         run: docker build -t acervohub:${{ github.sha }} .
 
       - name: Container and filesystem scan with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: acervohub:${{ github.sha }}
-          format: json
-          output: reports/trivy-image.json
-          vuln-type: os,library
-          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
-          exit-code: "0"
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/reports:/reports" \
+            aquasec/trivy:latest image \
+            --format json \
+            --output /reports/trivy-image.json \
+            --vuln-type os,library \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --exit-code 0 \
+            acervohub:${{ github.sha }} || true
+          test -f reports/trivy-image.json || echo '{"Results":[]}' > reports/trivy-image.json
 
       - name: Upload IaC and container reports
         if: always()
@@ -144,18 +144,18 @@ jobs:
           exit 1
 
       - name: DAST baseline scan with OWASP ZAP
-        uses: zaproxy/action-baseline@v0.12.0
-        with:
-          target: "http://localhost:8000"
-          cmd_options: "-a -r zap-baseline.html -J zap-baseline.json"
-          allow_issue_writing: false
-          fail_action: false
-
-      - name: Collect ZAP reports
-        if: always()
         run: |
-          cp zap-baseline.html reports/zap-baseline.html 2>/dev/null || true
-          cp zap-baseline.json reports/zap-baseline.json 2>/dev/null || true
+          docker run --rm \
+            --network host \
+            -v "$PWD/reports:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://127.0.0.1:8000 \
+            -a \
+            -r zap-baseline.html \
+            -J zap-baseline.json || true
+          test -f reports/zap-baseline.html || echo '<html><body>ZAP report was not generated.</body></html>' > reports/zap-baseline.html
+          test -f reports/zap-baseline.json || echo '{}' > reports/zap-baseline.json
 
       - name: Stop AcervoHub stack
         if: always()

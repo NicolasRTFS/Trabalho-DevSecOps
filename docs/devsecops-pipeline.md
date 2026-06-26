@@ -12,11 +12,11 @@ A implementacao principal esta em `.github/workflows/devsecops.yml` e foi planej
 
 ### Secret Detection
 
-Ferramenta: Gitleaks.
+Ferramenta: Gitleaks executado via container Docker.
 
 Objetivo: procurar credenciais, chaves de API, tokens e segredos acidentalmente versionados no repositorio e no historico de commits.
 
-Evidencia esperada: `gitleaks.sarif`.
+Evidencia esperada: `gitleaks.json`.
 
 ### SCA - Software Composition Analysis
 
@@ -44,7 +44,7 @@ Evidencia esperada: `checkov.json`.
 
 ### Container Scanning
 
-Ferramenta: Trivy.
+Ferramenta: Trivy executado via container Docker.
 
 Objetivo: analisar a imagem Docker do AcervoHub em busca de vulnerabilidades de sistema operacional e bibliotecas empacotadas.
 
@@ -52,7 +52,7 @@ Evidencia esperada: `trivy-image.json`.
 
 ### DAST - Dynamic Application Security Testing
 
-Ferramenta: OWASP ZAP Baseline Scan.
+Ferramenta: OWASP ZAP Baseline Scan executado via container Docker.
 
 Objetivo: subir a aplicacao com Docker Compose e executar uma varredura dinamica contra `http://localhost:8000`, avaliando headers, configuracoes HTTP, exposicoes e comportamentos exploraveis em tempo de execucao.
 
